@@ -104,6 +104,11 @@ if [[ "$response" != "yes" && "$response" != "y" && "$response" != "Y" && "$resp
     echo "Aborting."
     exit 1
 fi
+if mountpoint -q /mnt; then
+    echo "/mnt is already mounted. Unmounting..."
+    umount -R /mnt
+fi
+
 if [[ "$response" == "skip" ]]; then
     echo "Skipping formatting"
 else
@@ -115,10 +120,6 @@ fi
 
 
 
-if mountpoint -q /mnt; then
-    echo "/mnt is already mounted. Unmounting..."
-    umount -R /mnt
-fi
 
 mount -o subvol=/ "$seed_device" /mnt
 # if subvolume @ exists remove and create new one
