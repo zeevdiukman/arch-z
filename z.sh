@@ -2,10 +2,10 @@
 
 set -e
 
-# Configuration variables (will be populated via user selection)
-seed_device=""
-sprout_device=""
-efi_device=""
+# Configuration variables (will be populated via user selection or defaults if user press enter for each input)
+seed_device="/dev/vda1"
+sprout_device="/dev/vda2"
+efi_device="/dev/vda3"
 
 # 1. Select Disk
 echo "Available storage disks:"
@@ -55,9 +55,19 @@ get_partition() {
     done
 
     while true; do
-        read -r -p "$ps3_val (default 1): " REPLY
-        REPLY=${REPLY:-1}
-        if [[ "$REPLY" -gt 0 && "$REPLY" -le "${#parts[@]}" ]]; then
+        local def_idx=1
+        if [[ -n "$default_val" ]]; then
+            for i in "${!parts[@]}"; do
+                if [[ "${parts[i]}" == "$default_val"* ]]; then
+                    def_idx=$((i+1))
+                    break
+                fi
+            done
+        fi
+
+        read -r -p "$ps3_val (default $def_idx): " REPLY
+        REPLY=${REPLY:-$def_idx}
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [[ "$REPLY" -gt 0 && "$REPLY" -le "${#parts[@]}" ]]; then
             selection="${parts[$((REPLY-1))]}"
             eval "$var_name=$(echo "$selection" | cut -d' ' -f1)"
             break
@@ -67,9 +77,9 @@ get_partition() {
     done
 }
 
-get_partition "--- Select Seed Partition ---" "Seed device: " seed_device
-get_partition "--- Select Sprout Partition ---" "Sprout device: " sprout_device
-get_partition "--- Select EFI Partition ---" "EFI device: " efi_device
+get_partition "--- Select Seed Partition ---" "Seed device: " seed_device "$seed_device"
+get_partition "--- Select Sprout Partition ---" "Sprout device: " sprout_device "$sprout_device"
+get_partition "--- Select EFI Partition ---" "EFI device: " efi_device "$efi_device"
 
 echo ""
 echo "Configuration Summary:"

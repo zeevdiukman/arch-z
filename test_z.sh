@@ -81,9 +81,9 @@ echo "--- Starting z.sh in Mock Environment ---"
 # Run z.sh and provide sequence of inputs for test scenario 1 (Default settings)
 # Input sequence:
 # 1 (Enter) - Select Disk 1
-# 1 (Enter) - Select Seed
-# 1 (Enter) - Select Sprout
-# 1 (Enter) - Select EFI
+# (Enter) - Select Seed (should default to /dev/vda1)
+# (Enter) - Select Sprout (should default to /dev/vda2)
+# (Enter) - Select EFI (should default to /dev/vda3)
 # yes - Confirm formatting
 # (Enter) - Default packages
 # Yes - Confirm installation
