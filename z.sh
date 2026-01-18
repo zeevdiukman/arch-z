@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+# set -e
 read -r seed sprout efi
 seed_device=$seed
 sprout_device=$sprout
