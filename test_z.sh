@@ -61,7 +61,7 @@ EOF
 cat > "$MOCK_BIN/mountpoint" <<EOF
 #!/bin/bash
 echo "[mountpoint] \$*" >> "$LOG_FILE"
-return 1 # Simulate not mounted
+exit 0 # Simulate already mounted
 EOF
 
 # Mock arch-chroot

@@ -113,10 +113,11 @@ else
     echo "Filesystems created successfully."
 fi
 
-# check if any of the devices is mounted
-if mountpoint -q "$seed_device" || mountpoint -q "$sprout_device" || mountpoint -q "$efi_device"; then
-    echo "One or more devices are already mounted. Unmounting..."
-    umount -R "$seed_device" "$sprout_device" "$efi_device"
+
+
+if mountpoint -q /mnt; then
+    echo "/mnt is already mounted. Unmounting..."
+    umount -R /mnt
 fi
 
 mount -o subvol=/ "$seed_device" /mnt
