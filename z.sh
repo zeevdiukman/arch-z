@@ -7,6 +7,11 @@ selected_disk="/dev/vda"
 seed_device="/dev/vda1"
 sprout_device="/dev/vda2"
 efi_device="/dev/vda3"
+archchroot() {
+    [[ "$1" == "--" ]] && shift
+    local cmd="$*"
+    arch-chroot /mnt /usr/bin/bash -c "$cmd"
+}
 
 # 1. Select Disk
 echo "Available storage disks:"
@@ -158,6 +163,4 @@ genfstab -U /mnt > /mnt/etc/fstab
 echo "root:root" | arch-chroot /mnt chpasswd
 arch-chroot /mnt useradd -m -G wheel -s /usr/bin/bash zeev
 echo "zeev:zeev" | arch-chroot /mnt chpasswd
-# arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
-# arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-# arch-chroot /mnt systemctl enable NetworkManager
+archchroot -- "echo 'zeev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/zeev"

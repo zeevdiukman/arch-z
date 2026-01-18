@@ -11,6 +11,12 @@ LOG_FILE="$MOCK_DIR/test_log.txt"
 touch "$LOG_FILE"
 
 echo "Using mock directory: $MOCK_DIR"
+mkdir -p "$MOCK_DIR/mnt/etc/sudoers.d"
+
+# Patch z.sh to use $MOCK_DIR/mnt instead of /mnt
+TEST_SCRIPT="$MOCK_DIR/z_test.sh"
+sed "s|/mnt|$MOCK_DIR/mnt|g" ./z.sh > "$TEST_SCRIPT"
+chmod +x "$TEST_SCRIPT"
 
 # Mock lsblk
 cat > "$MOCK_BIN/lsblk" <<'EOF'
@@ -88,7 +94,7 @@ echo "--- Starting z.sh in Mock Environment ---"
 # yes - Confirm formatting
 # (Enter) - Default packages
 # Yes - Confirm installation
-printf "\n\n\n\nyes\n\nYes\n" | bash ./z.sh
+printf "\n\n\n\nyes\n\nYes\n" | bash "$TEST_SCRIPT"
 
 echo ""
 echo "--- Test Execution Log ---"
