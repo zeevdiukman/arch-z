@@ -1,9 +1,18 @@
 #!/bin/bash
 
 # set -e
-read -r -p "Seed device: " seed_device
-read -r -p "Sprout device: " sprout_device
-read -r -p "EFI device: " efi_device
+read -r -p "Seed device(/dev/vda1): " seed_device
+read -r -p "Sprout device(/dev/vda2): " sprout_device
+read -r -p "EFI device(/dev/vda3): " efi_device
+if [[ -z "$seed_device" ]]; then
+    seed_device="vda1"
+fi
+if [[ -z "$sprout_device" ]]; then
+    sprout_device="vda2"
+fi
+if [[ -z "$efi_device" ]]; then
+    efi_device="vda3"
+fi
 echo "Seed device: /dev/$seed_device"
 echo "Sprout device: /dev/$sprout_device"
 echo "EFI device: /dev/$efi_device"
