@@ -2,6 +2,11 @@
 
 set -e
 
+selected_disk="/dev/vda"
+seed="/dev/vda1"
+sprout="/dev/vda2"
+efi="/dev/vda3"
+
 # 1. Select Disk
 echo "Available storage disks:"
 mapfile -t disks < <(lsblk -p -dno NAME,SIZE,MODEL)
@@ -19,6 +24,7 @@ select disk_info in "${disks[@]}"; do
         echo "Invalid selection."
     fi
 done
+
 
 # 2. Select Partitions
 get_partition() {
@@ -60,19 +66,29 @@ echo "Sprout device: $sprout_device"
 echo "EFI device:    $efi_device"
 echo ""
 
-read -r -p "Confirm formatting and installation? (y/N): " response
-if [[ "$response" != "y" && "$response" != "Y" ]]; then
+read -r -p "Confirm formatting and installation? (yes/no/skip): " response
+if [[ "$response" != "yes" && "$response" != "y" && "$response" != "Y" ]]; then
     echo "Aborting."
     exit 1
 fi
-
-mkfs.btrfs -f -L SEED "$seed_device"
-mkfs.btrfs -f -L SPRUT "$sprout_device"
-mkfs.fat -F 32 -n EFI "$efi_device"
-
-echo "Filesystems created successfully."
+if [[ "$response" == "skip" ]]; then
+    echo "Skipping formatting"
+else
+    mkfs.btrfs -f -L SEED "$seed_device"
+    mkfs.btrfs -f -L SPRUT "$sprout_device"
+    mkfs.fat -F 32 -n EFI "$efi_device"
+    echo "Filesystems created successfully."
+fi
+if mountpoint -q /mnt; then
+    echo "/mnt is already mounted. Unmounting..."
+    umount -R /mnt
+fi
 
 mount -o subvol=/ "$seed_device" /mnt
+# if subvolume @ exists remove and create new one
+if btrfs subvolume show /mnt | grep -q "@"; then
+    btrfs subvolume delete /mnt/@
+fi
 btrfs su cr /mnt/@
 umount -R /mnt
 mount -o subvol=/@ "$seed_device" /mnt
@@ -100,4 +116,10 @@ fi
 pacstrap -K /mnt ${packages[@]}
 mount -m "$efi_device" /mnt/efi
 genfstab -U /mnt > /mnt/etc/fstab
-arch-chroot /mnt
+# set root password programmatically with "arch-chroot /mnt passwd"
+arch-chroot /mnt echo "root:root" | chpasswd
+arch-chroot /mnt useradd -m -G wheel -s /usr/bin/bash zeev
+arch-chroot /mnt echo "zeev:zeev" | chpasswd
+# arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
+# arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+# arch-chroot /mnt systemctl enable NetworkManager
