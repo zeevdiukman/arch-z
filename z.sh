@@ -1,0 +1,41 @@
+#!/bin/bash
+
+set -e
+
+# read user input to give btrfs seed, sprout and efi device
+
+read -r seed sprout efi
+seed_device=$seed
+sprout_device=$sprout
+efi_device=$efi
+# display the setup and ask if continue (y,N)
+echo "Seed device: /dev/$seed_device"
+echo "Sprout device: /dev/$sprout_device"
+echo "EFI device: /dev/$efi_device"
+# defaults to N
+read -r -p "Are you sure? (y,N): " response
+if [[ "$response" != "y" && "$response" != "Y" ]]; then
+    echo "Aborting."
+    exit 1
+fi
+
+mkfs.btrfs -f -L SEED /dev/$seed_device
+mkfs.btrfs -f -L SPRUT /dev/$sprout_device
+mkfs.fat -F 32 -n EFI /dev/$efi_device
+echo "Filesystems created successfully."
+
+mount -o subvol=/ /dev/vda1 /mnt
+
+btrfs su cr /mnt/@
+
+umount -R /mnt
+
+mount -o subvol=/@ /dev/vda1 /mnt
+
+pacstrap -K /mnt base linux dracut btrfs-progs linux-firmware sudo nano networkmanager
+
+mount -m /dev/vda3 /mnt/efi
+
+genfstab -U /mnt > /mnt/etc/fstab
+
+arch-chroot /mnt /bin/bash /root/z2.sh
