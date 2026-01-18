@@ -1,55 +1,103 @@
 #!/bin/bash
 
 set -e
-read -r -p "Seed device(/dev/vda1): " seed_device
-read -r -p "Sprout device(/dev/vda2): " sprout_device
-read -r -p "EFI device(/dev/vda3): " efi_device
-if [[ -z "$seed_device" ]]; then
-    seed_device="vda1"
+
+# 1. Select Disk
+echo "Available storage disks:"
+mapfile -t disks < <(lsblk -p -dno NAME,SIZE,MODEL)
+if [ ${#disks[@]} -eq 0 ]; then
+    echo "No disks found!"
+    exit 1
 fi
-if [[ -z "$sprout_device" ]]; then
-    sprout_device="vda2"
-fi
-if [[ -z "$efi_device" ]]; then
-    efi_device="vda3"
-fi
-echo "Seed device: /dev/$seed_device"
-echo "Sprout device: /dev/$sprout_device"
-echo "EFI device: /dev/$efi_device"
-read -r -p "Are you sure? (y,N): " response
+
+PS3="Select a disk to choose partitions from: "
+select disk_info in "${disks[@]}"; do
+    if [[ -n "$disk_info" ]]; then
+        selected_disk=$(echo "$disk_info" | awk '{print $1}')
+        break
+    else
+        echo "Invalid selection."
+    fi
+done
+
+# 2. Select Partitions
+get_partition() {
+    local prompt="$1"
+    local ps3_val="$2"
+    local var_name="$3"
+    local parts=()
+    while IFS= read -r line; do
+        parts+=("$line")
+    done < <(lsblk -p -nlo NAME,SIZE,TYPE "$selected_disk" | awk '$3=="part" {printf "%s (%s)\n", $1, $2}')
+
+    if [ ${#parts[@]} -eq 0 ]; then
+        echo "No partitions found on $selected_disk!"
+        exit 1
+    fi
+
+    echo ""
+    echo "$prompt"
+    PS3="$ps3_val"
+    local selection
+    select selection in "${parts[@]}"; do
+        if [[ -n "$selection" ]]; then
+            eval "$var_name=$(echo "$selection" | cut -d' ' -f1)"
+            break
+        else
+            echo "Invalid selection."
+        fi
+    done
+}
+
+get_partition "--- Select Seed Partition ---" "Seed device: " seed_device
+get_partition "--- Select Sprout Partition ---" "Sprout device: " sprout_device
+get_partition "--- Select EFI Partition ---" "EFI device: " efi_device
+
+echo ""
+echo "Configuration Summary:"
+echo "Seed device:   $seed_device"
+echo "Sprout device: $sprout_device"
+echo "EFI device:    $efi_device"
+echo ""
+
+read -r -p "Confirm formatting and installation? (y/N): " response
 if [[ "$response" != "y" && "$response" != "Y" ]]; then
     echo "Aborting."
     exit 1
 fi
-mkfs.btrfs -f -L SEED /dev/$seed_device
-mkfs.btrfs -f -L SPRUT /dev/$sprout_device
-mkfs.fat -F 32 -n EFI /dev/$efi_device
+
+mkfs.btrfs -f -L SEED "$seed_device"
+mkfs.btrfs -f -L SPRUT "$sprout_device"
+mkfs.fat -F 32 -n EFI "$efi_device"
+
 echo "Filesystems created successfully."
-mount -o subvol=/ /dev/vda1 /mnt
+
+mount -o subvol=/ "$seed_device" /mnt
 btrfs su cr /mnt/@
 umount -R /mnt
-mount -o subvol=/@ /dev/vda1 /mnt
+mount -o subvol=/@ "$seed_device" /mnt
+
 # ask user to input packages to install
 read -r -p "Enter packages to install (space-separated): " packages_input
 
 # convert input string to array
 packages=($packages_input)
 
-# FIX 1: Add '#' to check the length (number of elements)
 if [[ ${#packages[@]} -eq 0 ]]; then
-   # FIX 2: Remove '$' from the variable name during assignment
    packages=(base linux linux-firmware btrfs-progs nano sudo networkmanager efibootmgr grub os-prober base-devel git)
    echo "No packages specified. Defaulting to: ${packages[@]}"
 else
    echo "The following packages will be installed: ${packages[@]}"
 fi
+
 read -r -p "Continue with installation? (Yes/no): " response
 # default to yes
 if [[ "$response" == "no" || "$response" == "No" ]]; then
     echo "Aborting."
     exit 1
 fi
+
 pacstrap -K /mnt ${packages[@]}
-mount -m /dev/vda3 /mnt/efi
+mount -m "$efi_device" /mnt/efi
 genfstab -U /mnt > /mnt/etc/fstab
 arch-chroot /mnt
