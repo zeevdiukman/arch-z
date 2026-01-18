@@ -34,7 +34,7 @@ read -r -p "Enter packages to install (space-separated): " packages_input
 # convert input string to array
 packages=($packages_input)
 if [[ ${#packages[@]} -eq 0 ]]; then
-   $packages=("base" "linux" "linux-firmware" "vim" "git" "networkmanager" "btrfs-progs" "efibootmgr" "grub" "os-prober" "base-devel" "sudo")
+   $packages=(base linux linux-firmware btrfs-progs nano sudo networkmanager efibootmgr grub os-prober base-devel git)
    echo "No packages specified. Defaulting to: ${packages[@]}"
 else
    echo "The following packages will be installed: ${packages[@]}"
