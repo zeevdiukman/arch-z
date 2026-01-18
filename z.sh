@@ -31,13 +31,17 @@ umount -R /mnt
 mount -o subvol=/@ /dev/vda1 /mnt
 # ask user to input packages to install
 read -r -p "Enter packages to install (space-separated): " packages_input
+# convert input string to array
 packages=($packages_input)
-# ask user for package installation confirmation
-echo "The following packages will be installed: ${packages[@]}"
-# ask user for confirmation before proceeding
-read -r -p "Continue with installation? (y,N): " response
-if [[ "$response" != "y" && "$response" != "Y" ]]; then
-    echo "Installation aborted."
+if [[ ${#packages[@]} -eq 0 ]]; then
+   $packages=("base" "linux" "linux-firmware" "vim" "git" "networkmanager" "btrfs-progs" "efibootmgr" "grub" "os-prober" "base-devel" "sudo")
+   echo "No packages specified. Defaulting to: ${packages[@]}"
+else
+   echo "The following packages will be installed: ${packages[@]}"
+fi
+read -r -p "Continue with installation? (Yes/no): " response
+if [[ "$response" == "n" || "$response" == "N" ]]; then
+    echo "Aborting."
     exit 1
 fi
 pacstrap -K /mnt ${packages[@]}
