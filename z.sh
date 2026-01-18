@@ -40,7 +40,8 @@ else
    echo "The following packages will be installed: ${packages[@]}"
 fi
 read -r -p "Continue with installation? (Yes/no): " response
-if [[ "$response" == "n" || "$response" == "N" ]]; then
+# default to yes
+if [[ "$response" == "no" || "$response" == "No" ]]; then
     echo "Aborting."
     exit 1
 fi
