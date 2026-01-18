@@ -15,8 +15,11 @@ if [ ${#disks[@]} -eq 0 ]; then
     exit 1
 fi
 
-PS3="Select a disk to choose partitions from: "
+PS3="Select a disk to choose partitions from (default 1): "
 select disk_info in "${disks[@]}"; do
+    if [[ -z "$REPLY" ]]; then
+        disk_info="${disks[0]}"
+    fi
     if [[ -n "$disk_info" ]]; then
         selected_disk=$(echo "$disk_info" | awk '{print $1}')
         break
@@ -44,9 +47,12 @@ get_partition() {
 
     echo ""
     echo "$prompt"
-    PS3="$ps3_val"
+    PS3="$ps3_val (default 1): "
     local selection
     select selection in "${parts[@]}"; do
+        if [[ -z "$REPLY" ]]; then
+            selection="${parts[0]}"
+        fi
         if [[ -n "$selection" ]]; then
             eval "$var_name=$(echo "$selection" | cut -d' ' -f1)"
             break
