@@ -160,7 +160,7 @@ pacstrap -K /mnt ${packages[@]}
 mount -m "$efi_device" /mnt/efi
 genfstab -U /mnt > /mnt/etc/fstab
 
-chrt -- chpasswd "root:root"
+chrt -- echo 'root:root' | chpasswd 
 chrt -- useradd -m -G wheel -s /usr/bin/bash zeev
-chrt -- chpasswd "zeev:zeev"
+chrt -- echo 'zeev:zeev' | chpasswd 
 chrt -- echo 'zeev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/zeev
