@@ -113,6 +113,10 @@ get_partition "--- Select Seed Partition ---" "Seed device: " seed_device "$seed
 get_partition "--- Select Sprout Partition ---" "Sprout device: " sprout_device "$sprout_device"
 get_partition "--- Select EFI Partition ---" "EFI device: " efi_device "$efi_device"
 
+# Get Sprout PARTUUID for bootloader configuration
+sprout_partuuid=$(blkid -s PARTUUID -o value "$sprout_device")
+echo "Sprout PARTUUID: $sprout_partuuid"
+
 echo ""
 echo "Configuration Summary:"
 echo "Seed device:   $seed_device"
@@ -245,6 +249,7 @@ chroot_function() {
     "grub-install ${grub_install_options[*]}"
     "echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub"
     "grub-mkconfig -o /boot/grub/grub.cfg"
+    "sed -i 's/root=UUID=[A-Fa-f0-9-]*/root=PARTUUID=$sprout_partuuid/g' /boot/grub/grub.cfg"
     "passwd -l root"
     "mkinitcpio -P"
     )
@@ -264,4 +269,16 @@ btrfs device add -f "$sprout_device" /mnt
 umount -R /mnt
 mount -o subvol=/@ "$sprout_device" /mnt
 mount -m "$efi_device" /mnt/efi
-genfstab -U /mnt > /mnt/etc/fstab
+genfstab -t PARTUUID /mnt > /mnt/etc/fstab
+
+echo ""
+echo "################################################################"
+echo "#                   INSTALLATION COMPLETE                      #"
+echo "################################################################"
+echo ""
+read -r -p "Do you want to reboot now? (y/N): " reboot_ans
+if [[ "$reboot_ans" =~ ^[Yy]$ ]]; then
+    reboot
+else
+    echo "You can reboot manually by typing 'reboot'."
+fi
