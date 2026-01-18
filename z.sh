@@ -7,7 +7,7 @@ selected_disk="/dev/vda"
 seed_device="/dev/vda1"
 sprout_device="/dev/vda2"
 efi_device="/dev/vda3"
-archchroot() {
+chrt() {
     [[ "$1" == "--" ]] && shift
     local cmd="$*"
     arch-chroot /mnt /usr/bin/bash -c "$cmd"
@@ -159,8 +159,8 @@ fi
 pacstrap -K /mnt ${packages[@]}
 mount -m "$efi_device" /mnt/efi
 genfstab -U /mnt > /mnt/etc/fstab
-# set root and user passwords
-echo "root:root" | arch-chroot /mnt chpasswd
-arch-chroot /mnt useradd -m -G wheel -s /usr/bin/bash zeev
-echo "zeev:zeev" | arch-chroot /mnt chpasswd
-archchroot -- "echo 'zeev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/zeev"
+
+chrt -- chpasswd "root:root"
+chrt -- useradd -m -G wheel -s /usr/bin/bash zeev
+chrt -- chpasswd "zeev:zeev"
+chrt -- echo 'zeev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/zeev
