@@ -15,12 +15,15 @@ if [ ${#disks[@]} -eq 0 ]; then
     exit 1
 fi
 
-PS3="Select a disk to choose partitions from (default 1): "
-select disk_info in "${disks[@]}"; do
-    if [[ -z "$REPLY" ]]; then
-        disk_info="${disks[0]}"
-    fi
-    if [[ -n "$disk_info" ]]; then
+for i in "${!disks[@]}"; do
+    printf "%d) %s\n" "$((i+1))" "${disks[i]}"
+done
+
+while true; do
+    read -r -p "Select a disk to choose partitions from (default 1): " REPLY
+    REPLY=${REPLY:-1}
+    if [[ "$REPLY" -gt 0 && "$REPLY" -le "${#disks[@]}" ]]; then
+        disk_info="${disks[$((REPLY-1))]}"
         selected_disk=$(echo "$disk_info" | awk '{print $1}')
         break
     else
@@ -47,13 +50,15 @@ get_partition() {
 
     echo ""
     echo "$prompt"
-    PS3="$ps3_val (default 1): "
-    local selection
-    select selection in "${parts[@]}"; do
-        if [[ -z "$REPLY" ]]; then
-            selection="${parts[0]}"
-        fi
-        if [[ -n "$selection" ]]; then
+    for i in "${!parts[@]}"; do
+        printf "%d) %s\n" "$((i+1))" "${parts[i]}"
+    done
+
+    while true; do
+        read -r -p "$ps3_val (default 1): " REPLY
+        REPLY=${REPLY:-1}
+        if [[ "$REPLY" -gt 0 && "$REPLY" -le "${#parts[@]}" ]]; then
+            selection="${parts[$((REPLY-1))]}"
             eval "$var_name=$(echo "$selection" | cut -d' ' -f1)"
             break
         else
