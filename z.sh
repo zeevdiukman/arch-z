@@ -112,9 +112,11 @@ else
     mkfs.fat -F 32 -n EFI "$efi_device"
     echo "Filesystems created successfully."
 fi
-if mountpoint -q /mnt; then
-    echo "/mnt is already mounted. Unmounting..."
-    umount -R /mnt
+
+# check if any of the devices is mounted
+if mountpoint -q "$seed_device" || mountpoint -q "$sprout_device" || mountpoint -q "$efi_device"; then
+    echo "One or more devices are already mounted. Unmounting..."
+    umount -R "$seed_device" "$sprout_device" "$efi_device"
 fi
 
 mount -o subvol=/ "$seed_device" /mnt
@@ -122,6 +124,7 @@ mount -o subvol=/ "$seed_device" /mnt
 if btrfs subvolume list /mnt | grep -q "@$"; then
     btrfs subvolume delete /mnt/@
 fi
+
 btrfs su cr /mnt/@
 umount -R /mnt
 mount -o subvol=/@ "$seed_device" /mnt
