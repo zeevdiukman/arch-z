@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# set -e
+set -e
 read -r -p "Seed device(/dev/vda1): " seed_device
 read -r -p "Sprout device(/dev/vda2): " sprout_device
 read -r -p "EFI device(/dev/vda3): " efi_device
