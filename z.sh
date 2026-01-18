@@ -3,6 +3,7 @@
 set -e
 
 # Configuration variables (will be populated via user selection or defaults if user press enter for each input)
+selected_disk="/dev/vda"
 seed_device="/dev/vda1"
 sprout_device="/dev/vda2"
 efi_device="/dev/vda3"
@@ -20,9 +21,19 @@ for i in "${!disks[@]}"; do
 done
 
 while true; do
-    read -r -p "Select a disk to choose partitions from (default 1): " REPLY
-    REPLY=${REPLY:-1}
-    if [[ "$REPLY" -gt 0 && "$REPLY" -le "${#disks[@]}" ]]; then
+    def_idx=1
+    if [[ -n "$selected_disk" ]]; then
+        for i in "${!disks[@]}"; do
+            if [[ "${disks[i]}" == "$selected_disk"* ]]; then
+                def_idx=$((i+1))
+                break
+            fi
+        done
+    fi
+
+    read -r -p "Select a disk to choose partitions from (default $def_idx): " REPLY
+    REPLY=${REPLY:-$def_idx}
+    if [[ "$REPLY" =~ ^[0-9]+$ ]] && [[ "$REPLY" -gt 0 && "$REPLY" -le "${#disks[@]}" ]]; then
         disk_info="${disks[$((REPLY-1))]}"
         selected_disk=$(echo "$disk_info" | awk '{print $1}')
         break

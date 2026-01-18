@@ -16,6 +16,7 @@ echo "Using mock directory: $MOCK_DIR"
 cat > "$MOCK_BIN/lsblk" <<'EOF'
 #!/bin/bash
 if [[ "$*" == *"-p -dno NAME,SIZE,MODEL"* ]]; then
+    echo "/dev/loop0 1G Mock_Loop"
     echo "/dev/vda 100G Mock_Disk"
     echo "/dev/vdb 50G Mock_Secondary"
 elif [[ "$*" == *"-p -nlo NAME,SIZE,TYPE /dev/vda"* ]]; then
