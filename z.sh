@@ -2,10 +2,10 @@
 
 set -e
 
-selected_disk="/dev/vda"
-seed="/dev/vda1"
-sprout="/dev/vda2"
-efi="/dev/vda3"
+# Configuration variables (will be populated via user selection)
+seed_device=""
+sprout_device=""
+efi_device=""
 
 # 1. Select Disk
 echo "Available storage disks:"
@@ -31,6 +31,7 @@ get_partition() {
     local prompt="$1"
     local ps3_val="$2"
     local var_name="$3"
+    local default_val="$4"
     local parts=()
     while IFS= read -r line; do
         parts+=("$line")
@@ -67,7 +68,7 @@ echo "EFI device:    $efi_device"
 echo ""
 
 read -r -p "Confirm formatting and installation? (yes/no/skip): " response
-if [[ "$response" != "yes" && "$response" != "y" && "$response" != "Y" ]]; then
+if [[ "$response" != "yes" && "$response" != "y" && "$response" != "Y" && "$response" != "skip" ]]; then
     echo "Aborting."
     exit 1
 fi
@@ -86,7 +87,7 @@ fi
 
 mount -o subvol=/ "$seed_device" /mnt
 # if subvolume @ exists remove and create new one
-if btrfs subvolume show /mnt | grep -q "@"; then
+if btrfs subvolume list /mnt | grep -q "@$"; then
     btrfs subvolume delete /mnt/@
 fi
 btrfs su cr /mnt/@
@@ -116,10 +117,10 @@ fi
 pacstrap -K /mnt ${packages[@]}
 mount -m "$efi_device" /mnt/efi
 genfstab -U /mnt > /mnt/etc/fstab
-# set root password programmatically with "arch-chroot /mnt passwd"
-arch-chroot /mnt echo "root:root" | chpasswd
+# set root and user passwords
+echo "root:root" | arch-chroot /mnt chpasswd
 arch-chroot /mnt useradd -m -G wheel -s /usr/bin/bash zeev
-arch-chroot /mnt echo "zeev:zeev" | chpasswd
+echo "zeev:zeev" | arch-chroot /mnt chpasswd
 # arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB
 # arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 # arch-chroot /mnt systemctl enable NetworkManager
