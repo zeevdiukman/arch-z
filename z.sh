@@ -31,10 +31,14 @@ umount -R /mnt
 mount -o subvol=/@ /dev/vda1 /mnt
 # ask user to input packages to install
 read -r -p "Enter packages to install (space-separated): " packages_input
+
 # convert input string to array
 packages=($packages_input)
+
+# FIX 1: Add '#' to check the length (number of elements)
 if [[ ${#packages[@]} -eq 0 ]]; then
-   $packages=(base linux linux-firmware btrfs-progs nano sudo networkmanager efibootmgr grub os-prober base-devel git)
+   # FIX 2: Remove '$' from the variable name during assignment
+   packages=(base linux linux-firmware btrfs-progs nano sudo networkmanager efibootmgr grub os-prober base-devel git)
    echo "No packages specified. Defaulting to: ${packages[@]}"
 else
    echo "The following packages will be installed: ${packages[@]}"
