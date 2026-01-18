@@ -7,6 +7,22 @@ selected_disk="/dev/vda"
 seed_device="/dev/vda1"
 sprout_device="/dev/vda2"
 efi_device="/dev/vda3"
+
+default_packages=(
+    base 
+    linux 
+    linux-firmware 
+    btrfs-progs 
+    nano 
+    sudo 
+    networkmanager 
+    efibootmgr 
+    grub 
+    os-prober 
+    base-devel 
+    git
+)
+
 chrt() {
     [[ "$1" == "--" ]] && shift
     local cmd="$*"
@@ -118,7 +134,7 @@ if [[ "$response" == "skip" ]]; then
     echo "Skipping formatting"
 else
     mkfs.btrfs -f -L SEED "$seed_device"
-    mkfs.btrfs -f -L SPRUT "$sprout_device"
+    mkfs.btrfs -f -L SPROUT "$sprout_device"
     mkfs.fat -F 32 -n EFI "$efi_device"
     echo "Filesystems created successfully."
 fi
@@ -143,7 +159,7 @@ read -r -p "Enter packages to install (space-separated): " packages_input
 packages=($packages_input)
 
 if [[ ${#packages[@]} -eq 0 ]]; then
-   packages=(base linux linux-firmware btrfs-progs nano sudo networkmanager efibootmgr grub os-prober base-devel git)
+   packages=(${default_packages[@]})
    echo "No packages specified. Defaulting to: ${packages[@]}"
 else
    echo "The following packages will be installed: ${packages[@]}"
@@ -160,7 +176,92 @@ pacstrap -K /mnt ${packages[@]}
 mount -m "$efi_device" /mnt/efi
 genfstab -U /mnt > /mnt/etc/fstab
 
-chrt -- echo 'root:root' | chpasswd 
-chrt -- useradd -m -G wheel -s /usr/bin/bash zeev
-chrt -- echo 'zeev:zeev' | chpasswd 
-chrt -- echo 'zeev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/zeev
+# User Configuration
+echo "--- System Configuration ---"
+read -r -p "Enter hostname (default: arch-z): " target_hostname
+target_hostname=${target_hostname:-arch-z}
+
+read -r -p "Enter username (default: zeev): " target_user
+target_user=${target_user:-zeev}
+
+read -r -p "Enter timezone (default: Europe/Helsinki): " target_timezone
+target_timezone=${target_timezone:-Europe/Helsinki}
+
+echo "Set root password:"
+while true; do
+    read -r -s -p "Password: " root_pass
+    echo
+    read -r -s -p "Confirm Password: " root_pass_confirm
+    echo
+    [ "$root_pass" = "$root_pass_confirm" ] && break
+    echo "Passwords do not match. Try again."
+done
+
+echo "Set password for user $target_user:"
+while true; do
+    read -r -s -p "Password: " user_pass
+    echo
+    read -r -s -p "Confirm Password: " user_pass_confirm
+    echo
+    [ "$user_pass" = "$user_pass_confirm" ] && break
+    echo "Passwords do not match. Try again."
+done
+
+
+
+chroot_function() {
+    mkinitcpio_hooks=(
+        base
+        udev
+        autodetect
+        microcode
+        modconf
+        kms
+        keyboard
+        block
+        btrfs
+        filesystems
+    )
+    grub_install_options=(
+        --target=x86_64-efi
+        --efi-directory=/efi
+        --boot-directory=/boot
+        --bootloader-id=GRUB
+    )
+    installation_lines_array=(
+    "hwclock --systohc"
+    "echo '$target_hostname' > /etc/hostname"
+    "echo 'KEYMAP=us' > /etc/vconsole.conf"
+    "sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen"
+    "locale-gen"
+    "echo 'LANG=en_US.UTF-8' > /etc/locale.conf"
+    "ln -sf /usr/share/zoneinfo/$target_timezone /etc/localtime"
+    "sed -i \"s/^HOOKS=.*/HOOKS=(${mkinitcpio_hooks[*]})/\" /etc/mkinitcpio.conf"
+    "echo 'root:$root_pass' | chpasswd"
+    "useradd -m -G wheel -s /usr/bin/bash $target_user"
+    "echo '$target_user:$user_pass' | chpasswd"
+    "echo '$target_user ALL=(ALL:ALL) ALL' > /etc/sudoers.d/$target_user"
+    "systemctl enable systemd-timesyncd"
+    "grub-install ${grub_install_options[*]}"
+    "echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub"
+    "grub-mkconfig -o /boot/grub/grub.cfg"
+    "passwd -l root"
+    "mkinitcpio -P"
+    )
+    
+    local script
+    script=$(printf "%s\n" "${installation_lines_array[@]}")
+    chrt -- "$script"
+}
+
+chroot_function
+
+#################################################3
+umount -R /mnt
+btrfstune -S 1 "$seed_device"
+mount -o subvol=/@ "$seed_device" /mnt
+btrfs device add -f "$sprout_device" /mnt
+umount -R /mnt
+mount -o subvol=/@ "$sprout_device" /mnt
+mount -m "$efi_device" /mnt/efi
+genfstab -U /mnt > /mnt/etc/fstab
