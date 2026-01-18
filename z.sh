@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # set -e
-read -r seed sprout efi
-seed_device=$seed
-sprout_device=$sprout
-efi_device=$efi
+read -r -p "Seed device: " seed_device
+read -r -p "Sprout device: " sprout_device
+read -r -p "EFI device: " efi_device
 echo "Seed device: /dev/$seed_device"
 echo "Sprout device: /dev/$sprout_device"
 echo "EFI device: /dev/$efi_device"
