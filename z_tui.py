@@ -53,6 +53,7 @@ class DiskSelectScreen(Screen):
         table = self.query_one(DataTable)
         self.app.selected_disk = self.disks_data[event.cursor_row]['name']
         self.query_one("#btn_next").disabled = False
+        self.app.push_screen("partition_select")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_next":
@@ -96,6 +97,14 @@ class PartitionSelectScreen(Screen):
                  self.query_one("#sel_sprout").value = val
             elif val == f"{self.app.selected_disk}3":
                  self.query_one("#sel_efi").value = val
+    
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.control.id == "sel_seed":
+             self.query_one("#sel_sprout").focus()
+        elif event.control.id == "sel_sprout":
+             self.query_one("#sel_efi").focus()
+        elif event.control.id == "sel_efi":
+             self.query_one("#btn_next").focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_next":
@@ -140,6 +149,16 @@ class ConfigScreen(Screen):
         )
         yield Footer()
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        ids = ["inp_hostname", "inp_user", "inp_timezone", "inp_root_pass", "inp_root_pass_confirm", "inp_user_pass", "inp_user_pass_confirm"]
+        current_id = event.control.id
+        if current_id in ids:
+            idx = ids.index(current_id)
+            if idx < len(ids) - 1:
+                self.query_one(f"#{ids[idx+1]}").focus()
+            else:
+                self.query_one("#btn_next").press()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_next":
             # Validation
@@ -176,6 +195,9 @@ class PackageScreen(Screen):
             Button("Review Summary", variant="primary", id="btn_next"),
         )
         yield Footer()
+    
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.query_one("#btn_next").press()
         
     def on_button_pressed(self, event: Button.Pressed) -> None:
          if event.button.id == "btn_next":
