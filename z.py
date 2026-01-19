@@ -91,6 +91,42 @@ def get_partitions(disk):
                 parts.append({"path": columns[0], "display": display})
     return parts
 
+def run_live_command(command, log_func=None, check=True, shell=False, dry_run=False):
+    """Executes a command and streams output to log_func."""
+    if dry_run:
+        if log_func:
+            log_func(f"[DRY RUN] Would execute: {command}")
+        return
+
+    # Use shell=True if command is a string, consistent with run_command logic preference
+    # though run_command defaults shell=False. We follow the caller's instructions.
+    
+    # Needs to handle list vs string same as run_command
+    if isinstance(command, str) and not shell:
+         cmd_list = shlex.split(command)
+    else:
+         cmd_list = command
+
+    process = subprocess.Popen(
+        cmd_list,
+        shell=shell,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1 # Line buffered
+    )
+    
+    if log_func:
+        for line in process.stdout:
+            log_func(line.rstrip())
+            
+    return_code = process.wait()
+    if check and return_code != 0:
+        if log_func:
+             log_func(f"Command failed with return code {return_code}")
+        # Mimic subprocess.CalledProcessError
+        raise subprocess.CalledProcessError(return_code, command)
+
 def perform_installation(config: InstallConfig, log_func=print):
     """
     Executes the installation process based on the provided configuration.
@@ -102,7 +138,13 @@ def perform_installation(config: InstallConfig, log_func=print):
         # Merge dry_run into kwargs if not explicitly set
         if 'dry_run' not in kwargs:
             kwargs['dry_run'] = config.dry_run
-        return run_command(cmd, **kwargs)
+            
+        # If capturing output, we use the standard run_command (buffered)
+        if kwargs.get('capture_output'):
+            return run_command(cmd, **kwargs)
+        
+        # Otherwise, use live command for streaming logs
+        return run_live_command(cmd, log_func=log_func, **kwargs)
 
     log_func("--- Starting Installation ---")
     
