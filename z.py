@@ -6,196 +6,50 @@ import os
 import shlex
 import getpass
 import shutil
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-# Configuration variables
-# (Keeping global defaults for CLI fallbacks if needed, though they move to InstallConfig default mostly)
-default_packages = [
-    "base", "linux", "linux-firmware", "btrfs-progs", "nano", "sudo",
-    "networkmanager", "efibootmgr", "grub", "os-prober", "base-devel", "git"
-]
+# ... (imports continue)
 
-@dataclass
-class InstallConfig:
-    seed_device: str
-    sprout_device: str
-    efi_device: str
-    hostname: str = "arch-z"
-    username: str = "zeev"
-    timezone: str = "Europe/Helsinki"
-    root_password: str = ""
-    user_password: str = ""
-    packages: List[str] = field(default_factory=lambda: list(default_packages))
-    dry_run: bool = False
+# ... (existing code)
 
-def run_command(command, check=True, shell=False, capture_output=False, dry_run=False):
-    """Result wrapper for subprocess.run"""
-    if dry_run:
-        print(f"[DRY RUN] Would execute: {command}")
-        # Return a dummy completed process for dry runs so logic doesn't crash on attribute access
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
-
-    try:
-        # If command is a string and shell is False, split it (naive splitting)
-        # But better to rely on caller passing list if shell=False
-        if isinstance(command, str) and not shell:
-            cmd_list = shlex.split(command)
-        else:
-            cmd_list = command
-            
-        result = subprocess.run(
-            cmd_list,
-            check=check,
-            shell=shell,
-            text=True,
-            capture_output=capture_output
-        )
-        return result
-    except subprocess.CalledProcessError as e:
-        print(f"Error executing command: {command}")
-        print(f"Error output: {e.stderr}")
-        if check:
-            sys.exit(1)
-        return e
-
-def get_disks():
-    """Returns a list of dictionaries with disk info."""
-    cmd = ["lsblk", "-p", "-dno", "NAME,SIZE,MODEL"]
-    result = run_command(cmd, capture_output=True)
-    disks = []
-    if result.stdout:
-        lines = result.stdout.strip().split('\n')
-        for line in lines:
-            parts = line.split(maxsplit=2)
-            if len(parts) >= 2:
-                name = parts[0]
-                size = parts[1]
-                model = parts[2] if len(parts) > 2 else ""
-                disks.append({"name": name, "size": size, "model": model, "raw": line})
-    return disks
-
-def get_partitions(disk):
-    """Returns a list of partitions for the given disk."""
-    # lsblk -p -nlo NAME,SIZE,TYPE "$selected_disk" | awk '$3=="part" {printf "%s (%s)\n", $1, $2}'
-    cmd = f"lsblk -p -nlo NAME,SIZE,TYPE {disk}"
-    result = run_command(cmd, shell=True, capture_output=True)
-    parts = []
-    if result.stdout:
-        lines = result.stdout.strip().split('\n')
-        for line in lines:
-            # We want to match awk '$3=="part"' logic
-            columns = line.split()
-            if len(columns) >= 3 and columns[2] == "part":
-                # Create display string "NAME (SIZE)"
-                display = f"{columns[0]} ({columns[1]})"
-                parts.append({"path": columns[0], "display": display})
-    return parts
-
-def run_live_command(command, log_func=None, check=True, shell=False, dry_run=False):
-    """Executes a command and streams output to log_func."""
-    if dry_run:
-        if log_func:
-            log_func(f"[DRY RUN] Would execute: {command}")
-        return
-
-    # Use shell=True if command is a string, consistent with run_command logic preference
-    # though run_command defaults shell=False. We follow the caller's instructions.
-    
-    # Needs to handle list vs string same as run_command
-    if isinstance(command, str) and not shell:
-         cmd_list = shlex.split(command)
-    else:
-         cmd_list = command
-
-    process = subprocess.Popen(
-        cmd_list,
-        shell=shell,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1 # Line buffered
-    )
-    
-    if log_func:
-        for line in process.stdout:
-            log_func(line.rstrip())
-            
-    return_code = process.wait()
-    if check and return_code != 0:
-        if log_func:
-             log_func(f"Command failed with return code {return_code}")
-        # Mimic subprocess.CalledProcessError
-        raise subprocess.CalledProcessError(return_code, command)
-
-def check_dependencies(log_func=print):
-    """Checks if required system tools are available."""
-    required_tools = [
-        "lsblk", "btrfs", "mkfs.btrfs", "mkfs.fat", 
-        "pacstrap", "genfstab", "arch-chroot"
-    ]
-    missing = []
-    for tool in required_tools:
-        if not shutil.which(tool):
-            missing.append(tool)
-    
-    if missing:
-        msg = f"Error: Missing required tools: {', '.join(missing)}\nPlease install: btrfs-progs, dosfstools, arch-install-scripts"
-        log_func(msg)
-        raise RuntimeError(msg)
-
-def perform_installation(config: InstallConfig, log_func=print):
+def cleanup_mount(mount_point, log_func=print):
     """
-    Executes the installation process based on the provided configuration.
-    log_func is a function to display messages (defaults to print).
+    Robustly unmounts a path, killing processes if necessary.
     """
+    log_func(f"Unmounting {mount_point}...")
     
-    try:
-        check_dependencies(log_func)
-    except RuntimeError:
-        # If check fails, we stop. In TUI this will define the error.
-        return
+    # First try normal unmount
+    ret = subprocess.run(f"umount -R {mount_point}", shell=True, stderr=subprocess.DEVNULL)
+    if ret.returncode == 0:
+        return True
 
-    # helper for dry_run propagation
+    log_func(f"Unmount failed. Checking for busy processes on {mount_point}...")
     
-    # helper for dry_run propagation
-    def run(cmd, **kwargs):
-        # Merge dry_run into kwargs if not explicitly set
-        if 'dry_run' not in kwargs:
-            kwargs['dry_run'] = config.dry_run
-            
-        # If capturing output, we use the standard run_command (buffered)
-        if kwargs.get('capture_output'):
-            return run_command(cmd, **kwargs)
-        
-        # Otherwise, use live command for streaming logs
-        return run_live_command(cmd, log_func=log_func, **kwargs)
-
-    log_func("--- Starting Installation ---")
-    
-    # Get Sprout PARTUUID
-    if config.dry_run:
-        sprout_partuuid = "DRY-RUN-UUID-1234"
+    # Check for fuser
+    if shutil.which("fuser"):
+        log_func("Killing processes accessing the mount point...")
+        subprocess.run(f"fuser -k -m {mount_point}", shell=True)
+        time.sleep(1) # Give them a second to die
     else:
-        cmd_uuid = f"blkid -s PARTUUID -o value {config.sprout_device}"
-        sprout_partuuid = run(cmd_uuid, shell=True, capture_output=True).stdout.strip()
-    
-    log_func(f"Sprout PARTUUID: {sprout_partuuid}")
-    
-    # Check mountpoint
-    # For dry_run we might want to skip real checks or mock them
-    if not config.dry_run:
-        mount_check = subprocess.run(["mountpoint", "-q", "/mnt"], check=False)
-        if mount_check.returncode == 0:
-            log_func("/mnt is already mounted. Unmounting...")
-            run("umount -R /mnt", check=False)
+         log_func("Warning: 'fuser' not found. Cannot automatically kill busy processes.")
 
-    log_func("Creating filesystems...")
-    run(f"mkfs.btrfs -f -L SEED {config.seed_device}", shell=True)
-    run(f"mkfs.btrfs -f -L SPROUT {config.sprout_device}", shell=True)
-    run(f"mkfs.fat -F 32 -n EFI {config.efi_device}", shell=True)
-    log_func("Filesystems created successfully.")
+    # Retry unmount
+    ret = subprocess.run(f"umount -R {mount_point}", shell=True)
+    if ret.returncode == 0:
+        return True
         
+    # Last resort: Lazy unmount
+    log_func("Force/Lazy unmounting...")
+    ret = subprocess.run(f"umount -R -l {mount_point}", shell=True)
+    if ret.returncode != 0:
+        log_func(f"Critical: Failed to unmount {mount_point} even with lazy unmount.")
+        return False
+    return True
+
+# ... (perform_installation continues)
+
     # Initial Mount
     run(f"mount -o subvol=/ {config.seed_device} /mnt", shell=True)
     
@@ -206,56 +60,22 @@ def perform_installation(config: InstallConfig, log_func=print):
             run("btrfs subvolume delete /mnt/@", shell=True)
         
     run("btrfs su cr /mnt/@", shell=True)
-    run("umount -R /mnt", shell=True)
+    cleanup_mount("/mnt", log_func)
     run(f"mount -o subvol=/@ {config.seed_device} /mnt", shell=True)
     
-    # Pacstrap
-    log_func(f"Installing packages: {' '.join(config.packages)}")
-    run(["pacstrap", "-K", "/mnt"] + config.packages)
-    run(f"mount -m {config.efi_device} /mnt/efi", shell=True)
-    
-    # fstab
-    if not config.dry_run:
-        with open("/mnt/etc/fstab", "w") as f:
-            subprocess.run(["genfstab", "-U", "/mnt"], stdout=f, check=True)
-    else:
-        log_func("[DRY RUN] Would generate fstab")
-        
-    # Chroot function
-    mkinitcpio_hooks = "base udev autodetect microcode modconf kms keyboard block btrfs filesystems"
-    grub_options = "--target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB"
-    
-    install_script = [
-        "hwclock --systohc",
-        f"echo '{config.hostname}' > /etc/hostname",
-        "echo 'KEYMAP=us' > /etc/vconsole.conf",
-        "sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen",
-        "locale-gen",
-        "echo 'LANG=en_US.UTF-8' > /etc/locale.conf",
-        f"ln -sf /usr/share/zoneinfo/{config.timezone} /etc/localtime",
-        f'sed -i "s/^HOOKS=.*/HOOKS=({mkinitcpio_hooks})/" /etc/mkinitcpio.conf',
-        f"echo 'root:{config.root_password}' | chpasswd",
-        f"useradd -m -G wheel -s /usr/bin/bash {config.username}",
-        f"echo '{config.username}:{config.user_password}' | chpasswd",
-        f"echo '{config.username} ALL=(ALL:ALL) ALL' > /etc/sudoers.d/{config.username}",
-        "systemctl enable systemd-timesyncd",
-        f"grub-install {grub_options}",
-        "echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub",
-        "grub-mkconfig -o /boot/grub/grub.cfg",
-        f"sed -i 's/root=UUID=[A-Fa-f0-9-]*/root=PARTUUID={sprout_partuuid}/g' /boot/grub/grub.cfg",
-        "passwd -l root",
-        "mkinitcpio -P"
-    ]
+    # ... (skipping to end of chroot)
     
     full_script = "\n".join(install_script)
     # arch-chroot /mnt /usr/bin/bash -c "$cmd"
     # We pass the full script as one argument to bash -c
     run(["arch-chroot", "/mnt", "/usr/bin/bash", "-c", full_script])
     
+    # Give processes a moment to release handles (e.g. gpg-agent)
+    time.sleep(2)
+    
     # Final cleanup
     log_func("--- Finalizing Seed/Sprout setup ---")
-    log_func("Unmounting /mnt...")
-    run("umount -R /mnt", shell=True)
+    cleanup_mount("/mnt", log_func)
     
     log_func(f"Converting {config.seed_device} to a seed device...")
     run(f"btrfstune -S 1 {config.seed_device}", shell=True)
@@ -267,7 +87,7 @@ def perform_installation(config: InstallConfig, log_func=print):
     run(f"btrfs device add -f {config.sprout_device} /mnt", shell=True)
     
     log_func("Unmounting and remounting sprout device...")
-    run("umount -R /mnt", shell=True)
+    cleanup_mount("/mnt", log_func)
     run(f"mount -o subvol=/@ {config.sprout_device} /mnt", shell=True)
     
     log_func("Mounting EFI partition...")

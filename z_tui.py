@@ -286,6 +286,9 @@ class InstallScreen(Screen):
 
 class ZInstallerApp(App):
     CSS = """
+    Screen {
+        align: center middle;
+    }
     .title {
         text-align: center;
         text-style: bold;
@@ -294,9 +297,23 @@ class ZInstallerApp(App):
     .form-group {
         margin: 1 2;
         height: auto;
+        border: round $primary;
+        padding: 1;
     }
     DataTable {
         height: 1fr;
+        border: solid $secondary;
+    }
+    .install-container {
+        height: 100%;
+        width: 100%;
+        align: center middle; 
+    }
+    #install_log {
+        height: 1fr;
+        border: solid $secondary;
+        margin: 1;
+        background: $surface;
     }
     .buttons {
         align: center middle;
