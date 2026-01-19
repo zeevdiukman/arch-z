@@ -28,30 +28,11 @@ class InstallConfig:
     user_password: str = ""
     packages: List[str] = field(default_factory=lambda: list(default_packages))
     dry_run: bool = False
+    format_efi: bool = True
+    bootloader_id: str = "GRUB"
 
 def run_command(command, check=True, shell=False, capture_output=False, dry_run=False):
-    """Result wrapper for subprocess.run"""
-    if dry_run:
-        print(f"[DRY RUN] Would execute: {command}")
-        # Return a dummy completed process for dry runs so logic doesn't crash on attribute access
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
-
-    try:
-        # If command is a string and shell is False, split it (naive splitting)
-        # But better to rely on caller passing list if shell=False
-        if isinstance(command, str) and not shell:
-            cmd_list = shlex.split(command)
-        else:
-            cmd_list = command
-            
-        result = subprocess.run(
-            cmd_list,
-            check=check,
-            shell=shell,
-            text=True,
-            capture_output=capture_output
-        )
-        return result
+# ... (existing run_command code)
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {command}")
         print(f"Error output: {e.stderr}")
@@ -60,123 +41,44 @@ def run_command(command, check=True, shell=False, capture_output=False, dry_run=
         return e
 
 def get_disks():
-    """Returns a list of dictionaries with disk info."""
-    cmd = ["lsblk", "-p", "-dno", "NAME,SIZE,MODEL"]
-    result = run_command(cmd, capture_output=True)
-    disks = []
-    if result.stdout:
-        lines = result.stdout.strip().split('\n')
-        for line in lines:
-            parts = line.split(maxsplit=2)
-            if len(parts) >= 2:
-                name = parts[0]
-                size = parts[1]
-                model = parts[2] if len(parts) > 2 else ""
-                disks.append({"name": name, "size": size, "model": model, "raw": line})
+# ... (existing get_disks)
     return disks
 
 def get_partitions(disk):
-    """Returns a list of partitions for the given disk."""
-    # lsblk -p -nlo NAME,SIZE,TYPE "$selected_disk" | awk '$3=="part" {printf "%s (%s)\n", $1, $2}'
-    cmd = f"lsblk -p -nlo NAME,SIZE,TYPE {disk}"
-    result = run_command(cmd, shell=True, capture_output=True)
-    parts = []
-    if result.stdout:
-        lines = result.stdout.strip().split('\n')
-        for line in lines:
-            # We want to match awk '$3=="part"' logic
-            columns = line.split()
-            if len(columns) >= 3 and columns[2] == "part":
-                # Create display string "NAME (SIZE)"
-                display = f"{columns[0]} ({columns[1]})"
-                parts.append({"path": columns[0], "display": display})
+# ... (existing get_partitions)
     return parts
 
-def run_live_command(command, log_func=None, check=True, shell=False, dry_run=False):
-    """Executes a command and streams output to log_func."""
-    if dry_run:
-        if log_func:
-            log_func(f"[DRY RUN] Would execute: {command}")
-        return
-
-    # Use shell=True if command is a string, consistent with run_command logic preference
-    # though run_command defaults shell=False. We follow the caller's instructions.
-    
-    # Needs to handle list vs string same as run_command
-    if isinstance(command, str) and not shell:
-         cmd_list = shlex.split(command)
-    else:
-         cmd_list = command
-
-    process = subprocess.Popen(
-        cmd_list,
-        shell=shell,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1 # Line buffered
-    )
-    
-    if log_func:
-        for line in process.stdout:
-            log_func(line.rstrip())
-            
-    return_code = process.wait()
-    if check and return_code != 0:
-        if log_func:
-             log_func(f"Command failed with return code {return_code}")
-        # Mimic subprocess.CalledProcessError
-        raise subprocess.CalledProcessError(return_code, command)
-
-def check_dependencies(log_func=print):
-    """Checks if required system tools are available."""
-    required_tools = [
-        "lsblk", "btrfs", "mkfs.btrfs", "mkfs.fat", 
-        "pacstrap", "genfstab", "arch-chroot"
-    ]
-    missing = []
-    for tool in required_tools:
-        if not shutil.which(tool):
-            missing.append(tool)
-    
-    if missing:
-        msg = f"Error: Missing required tools: {', '.join(missing)}\nPlease install: btrfs-progs, dosfstools, arch-install-scripts"
-        log_func(msg)
-        raise RuntimeError(msg)
-
-def cleanup_mount(mount_point, log_func=print):
+def scan_efi_bootloaders(device):
     """
-    Robustly unmounts a path, killing processes if necessary.
+    Mounts the given device temporarily to check /EFI/ subdirectories.
+    Returns a list of directory names found (potential bootloader IDs).
     """
-    log_func(f"Unmounting {mount_point}...")
-    
-    # First try normal unmount
-    ret = subprocess.run(f"umount -R {mount_point}", shell=True, stderr=subprocess.DEVNULL)
-    if ret.returncode == 0:
-        return True
+    if not device:
+        return []
 
-    log_func(f"Unmount failed. Checking for busy processes on {mount_point}...")
+    # Temporary mount point
+    tmp_mnt = "/tmp/z_efi_check"
+    os.makedirs(tmp_mnt, exist_ok=True)
     
-    # Check for fuser
-    if shutil.which("fuser"):
-        log_func("Killing processes accessing the mount point...")
-        subprocess.run(f"fuser -k -m {mount_point}", shell=True)
-        time.sleep(1) # Give them a second to die
-    else:
-         log_func("Warning: 'fuser' not found. Cannot automatically kill busy processes.")
+    # Mount
+    try:
+        subprocess.run(f"mount {device} {tmp_mnt}", shell=True, check=True, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        return [] # Failed to mount (maybe not formatted yet)
 
-    # Retry unmount
-    ret = subprocess.run(f"umount -R {mount_point}", shell=True)
-    if ret.returncode == 0:
-        return True
-        
-    # Last resort: Lazy unmount
-    log_func("Force/Lazy unmounting...")
-    ret = subprocess.run(f"umount -R -l {mount_point}", shell=True)
-    if ret.returncode != 0:
-        log_func(f"Critical: Failed to unmount {mount_point} even with lazy unmount.")
-        return False
-    return True
+    found = []
+    efi_path = os.path.join(tmp_mnt, "EFI")
+    if os.path.exists(efi_path) and os.path.isdir(efi_path):
+        try:
+             found = [d for d in os.listdir(efi_path) if os.path.isdir(os.path.join(efi_path, d))]
+        except OSError:
+             pass
+    
+    # Unmount
+    subprocess.run(f"umount {tmp_mnt}", shell=True)
+    return found
+
+# ... (existing run_live_command, check_dependencies, cleanup_mount)
 
 def perform_installation(config: InstallConfig, log_func=print):
     """
@@ -225,7 +127,12 @@ def perform_installation(config: InstallConfig, log_func=print):
     log_func("Creating filesystems...")
     run(f"mkfs.btrfs -f -L SEED {config.seed_device}", shell=True)
     run(f"mkfs.btrfs -f -L SPROUT {config.sprout_device}", shell=True)
-    run(f"mkfs.fat -F 32 -n EFI {config.efi_device}", shell=True)
+    
+    if config.format_efi:
+        run(f"mkfs.fat -F 32 -n EFI {config.efi_device}", shell=True)
+    else:
+        log_func(f"Skipping EFI format (Using existing {config.efi_device})")
+
     log_func("Filesystems created successfully.")
         
     # Initial Mount
@@ -255,7 +162,7 @@ def perform_installation(config: InstallConfig, log_func=print):
         
     # Chroot function
     mkinitcpio_hooks = "base udev autodetect microcode modconf kms keyboard block btrfs filesystems"
-    grub_options = "--target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB"
+    grub_options = f"--target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id={config.bootloader_id}"
     
     install_script = [
         "hwclock --systohc",

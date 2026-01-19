@@ -261,28 +261,18 @@ class InstallScreen(Screen):
             timezone=self.app.conf_timezone,
             root_password=self.app.conf_root_pass,
             user_password=self.app.conf_user_pass,
+    # ... (skipping inside method)
             packages=self.app.packages,
-            # For testing safety, you might want to default to dry_run logic or prompt.
-            # But the user asked for the real deal. I'll add a safety switch.
-            dry_run=False 
+            dry_run=False,
+            format_efi=self.app.format_efi,
+            bootloader_id=self.app.bootloader_id
         )
         
         self.worker = InstallWork(config, self.write_log)
         self.worker.start()
         self.timer = self.set_interval(0.5, self.check_done)
 
-    def write_log(self, message):
-        self.query_one(Log).write_line(message)
-        
-    def check_done(self):
-        if not self.worker.is_alive():
-            self.timer.stop()
-            self.query_one("#btn_done").disabled = False
-            self.query_one(Log).write_line("--- Process Finished ---")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_done":
-            self.app.exit()
+    # ... (rest of InstallScreen)
 
 class ZInstallerApp(App):
     CSS = """
@@ -299,6 +289,11 @@ class ZInstallerApp(App):
         height: auto;
         border: round $primary;
         padding: 1;
+    }
+    .info-text {
+        color: $accent;
+        padding-left: 1;
+        height: auto;
     }
     DataTable {
         height: 1fr;
@@ -330,7 +325,11 @@ class ZInstallerApp(App):
     sprout_device = None
     efi_device = None
     
+    format_efi = True
+    bootloader_id = "GRUB"
+    
     conf_hostname = None
+# ...
     conf_username = None
     conf_timezone = None
     conf_root_pass = None
