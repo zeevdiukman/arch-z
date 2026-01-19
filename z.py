@@ -5,6 +5,7 @@ import sys
 import os
 import shlex
 import getpass
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -127,11 +128,35 @@ def run_live_command(command, log_func=None, check=True, shell=False, dry_run=Fa
         # Mimic subprocess.CalledProcessError
         raise subprocess.CalledProcessError(return_code, command)
 
+def check_dependencies(log_func=print):
+    """Checks if required system tools are available."""
+    required_tools = [
+        "lsblk", "btrfs", "mkfs.btrfs", "mkfs.fat", 
+        "pacstrap", "genfstab", "arch-chroot"
+    ]
+    missing = []
+    for tool in required_tools:
+        if not shutil.which(tool):
+            missing.append(tool)
+    
+    if missing:
+        msg = f"Error: Missing required tools: {', '.join(missing)}\nPlease install: btrfs-progs, dosfstools, arch-install-scripts"
+        log_func(msg)
+        raise RuntimeError(msg)
+
 def perform_installation(config: InstallConfig, log_func=print):
     """
     Executes the installation process based on the provided configuration.
     log_func is a function to display messages (defaults to print).
     """
+    
+    try:
+        check_dependencies(log_func)
+    except RuntimeError:
+        # If check fails, we stop. In TUI this will define the error.
+        return
+
+    # helper for dry_run propagation
     
     # helper for dry_run propagation
     def run(cmd, **kwargs):
