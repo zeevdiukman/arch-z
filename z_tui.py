@@ -247,13 +247,14 @@ class InstallScreen(Screen):
         
         self.worker = InstallWork(config, self.write_log)
         self.worker.start()
-        self.set_interval(0.5, self.check_done)
+        self.timer = self.set_interval(0.5, self.check_done)
 
     def write_log(self, message):
         self.query_one(Log).write_line(message)
         
     def check_done(self):
         if not self.worker.is_alive():
+            self.timer.stop()
             self.query_one("#btn_done").disabled = False
             self.query_one(Log).write_line("--- Process Finished ---")
 
