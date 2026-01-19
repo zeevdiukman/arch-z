@@ -5,20 +5,36 @@ import sys
 import os
 import shlex
 import getpass
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 # Configuration variables
-selected_disk = "/dev/vda"
-seed_device = "/dev/vda1"
-sprout_device = "/dev/vda2"
-efi_device = "/dev/vda3"
-
+# (Keeping global defaults for CLI fallbacks if needed, though they move to InstallConfig default mostly)
 default_packages = [
     "base", "linux", "linux-firmware", "btrfs-progs", "nano", "sudo",
     "networkmanager", "efibootmgr", "grub", "os-prober", "base-devel", "git"
 ]
 
-def run_command(command, check=True, shell=False, capture_output=False):
+@dataclass
+class InstallConfig:
+    seed_device: str
+    sprout_device: str
+    efi_device: str
+    hostname: str = "arch-z"
+    username: str = "zeev"
+    timezone: str = "Europe/Helsinki"
+    root_password: str = ""
+    user_password: str = ""
+    packages: List[str] = field(default_factory=lambda: list(default_packages))
+    dry_run: bool = False
+
+def run_command(command, check=True, shell=False, capture_output=False, dry_run=False):
     """Result wrapper for subprocess.run"""
+    if dry_run:
+        print(f"[DRY RUN] Would execute: {command}")
+        # Return a dummy completed process for dry runs so logic doesn't crash on attribute access
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
     try:
         # If command is a string and shell is False, split it (naive splitting)
         # But better to rely on caller passing list if shell=False
@@ -75,6 +91,132 @@ def get_partitions(disk):
                 parts.append({"path": columns[0], "display": display})
     return parts
 
+def perform_installation(config: InstallConfig, log_func=print):
+    """
+    Executes the installation process based on the provided configuration.
+    log_func is a function to display messages (defaults to print).
+    """
+    
+    # helper for dry_run propagation
+    def run(cmd, **kwargs):
+        # Merge dry_run into kwargs if not explicitly set
+        if 'dry_run' not in kwargs:
+            kwargs['dry_run'] = config.dry_run
+        return run_command(cmd, **kwargs)
+
+    log_func("--- Starting Installation ---")
+    
+    # Get Sprout PARTUUID
+    if config.dry_run:
+        sprout_partuuid = "DRY-RUN-UUID-1234"
+    else:
+        cmd_uuid = f"blkid -s PARTUUID -o value {config.sprout_device}"
+        sprout_partuuid = run(cmd_uuid, shell=True, capture_output=True).stdout.strip()
+    
+    log_func(f"Sprout PARTUUID: {sprout_partuuid}")
+    
+    # Check mountpoint
+    # For dry_run we might want to skip real checks or mock them
+    if not config.dry_run:
+        mount_check = subprocess.run(["mountpoint", "-q", "/mnt"], check=False)
+        if mount_check.returncode == 0:
+            log_func("/mnt is already mounted. Unmounting...")
+            run("umount -R /mnt", check=False)
+
+    log_func("Creating filesystems...")
+    run(f"mkfs.btrfs -f -L SEED {config.seed_device}", shell=True)
+    run(f"mkfs.btrfs -f -L SPROUT {config.sprout_device}", shell=True)
+    run(f"mkfs.fat -F 32 -n EFI {config.efi_device}", shell=True)
+    log_func("Filesystems created successfully.")
+        
+    # Initial Mount
+    run(f"mount -o subvol=/ {config.seed_device} /mnt", shell=True)
+    
+    # Check for @ subvolume
+    if not config.dry_run:
+        subvol_list = run("btrfs subvolume list /mnt", shell=True, capture_output=True).stdout
+        if any(line.endswith(" @") or line.endswith("path @") for line in subvol_list.splitlines()):
+            run("btrfs subvolume delete /mnt/@", shell=True)
+        
+    run("btrfs su cr /mnt/@", shell=True)
+    run("umount -R /mnt", shell=True)
+    run(f"mount -o subvol=/@ {config.seed_device} /mnt", shell=True)
+    
+    # Pacstrap
+    log_func(f"Installing packages: {' '.join(config.packages)}")
+    run(["pacstrap", "-K", "/mnt"] + config.packages)
+    run(f"mount -m {config.efi_device} /mnt/efi", shell=True)
+    
+    # fstab
+    if not config.dry_run:
+        with open("/mnt/etc/fstab", "w") as f:
+            subprocess.run(["genfstab", "-U", "/mnt"], stdout=f, check=True)
+    else:
+        log_func("[DRY RUN] Would generate fstab")
+        
+    # Chroot function
+    mkinitcpio_hooks = "base udev autodetect microcode modconf kms keyboard block btrfs filesystems"
+    grub_options = "--target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB"
+    
+    install_script = [
+        "hwclock --systohc",
+        f"echo '{config.hostname}' > /etc/hostname",
+        "echo 'KEYMAP=us' > /etc/vconsole.conf",
+        "sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen",
+        "locale-gen",
+        "echo 'LANG=en_US.UTF-8' > /etc/locale.conf",
+        f"ln -sf /usr/share/zoneinfo/{config.timezone} /etc/localtime",
+        f'sed -i "s/^HOOKS=.*/HOOKS=({mkinitcpio_hooks})/" /etc/mkinitcpio.conf',
+        f"echo 'root:{config.root_password}' | chpasswd",
+        f"useradd -m -G wheel -s /usr/bin/bash {config.username}",
+        f"echo '{config.username}:{config.user_password}' | chpasswd",
+        f"echo '{config.username} ALL=(ALL:ALL) ALL' > /etc/sudoers.d/{config.username}",
+        "systemctl enable systemd-timesyncd",
+        f"grub-install {grub_options}",
+        "echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub",
+        "grub-mkconfig -o /boot/grub/grub.cfg",
+        f"sed -i 's/root=UUID=[A-Fa-f0-9-]*/root=PARTUUID={sprout_partuuid}/g' /boot/grub/grub.cfg",
+        "passwd -l root",
+        "mkinitcpio -P"
+    ]
+    
+    full_script = "\n".join(install_script)
+    # arch-chroot /mnt /usr/bin/bash -c "$cmd"
+    # We pass the full script as one argument to bash -c
+    run(["arch-chroot", "/mnt", "/usr/bin/bash", "-c", full_script])
+    
+    # Final cleanup
+    log_func("--- Finalizing Seed/Sprout setup ---")
+    log_func("Unmounting /mnt...")
+    run("umount -R /mnt", shell=True)
+    
+    log_func(f"Converting {config.seed_device} to a seed device...")
+    run(f"btrfstune -S 1 {config.seed_device}", shell=True)
+    
+    log_func("Mounting seed device to add sprout...")
+    run(f"mount -o subvol=/@ {config.seed_device} /mnt", shell=True)
+    
+    log_func(f"Adding {config.sprout_device} as sprout device...")
+    run(f"btrfs device add -f {config.sprout_device} /mnt", shell=True)
+    
+    log_func("Unmounting and remounting sprout device...")
+    run("umount -R /mnt", shell=True)
+    run(f"mount -o subvol=/@ {config.sprout_device} /mnt", shell=True)
+    
+    log_func("Mounting EFI partition...")
+    run(f"mount -m {config.efi_device} /mnt/efi", shell=True)
+    
+    log_func("Generating final fstab with PARTUUIDs...")
+    if not config.dry_run:
+        with open("/mnt/etc/fstab", "w") as f:
+             subprocess.run(["genfstab", "-t", "PARTUUID", "/mnt"], stdout=f, check=True)
+    else:
+        log_func("[DRY RUN] Would generate final fstab")
+         
+    log_func("\n################################################################")
+    log_func("#                   INSTALLATION COMPLETE                      #")
+    log_func("################################################################\n")
+
 def select_option(options, prompt_text, default_val=None):
     """Generic selection loop"""
     if not options:
@@ -117,7 +259,11 @@ def select_option(options, prompt_text, default_val=None):
         print("Invalid selection.")
 
 def main():
-    global selected_disk, seed_device, sprout_device, efi_device
+    # Helper defaults
+    current_disk_default = "/dev/vda"
+    seed_default = "/dev/vda1"
+    sprout_default = "/dev/vda2"
+    efi_default = "/dev/vda3"
     
     # 1. Select Disk
     print("Available storage disks:")
@@ -126,7 +272,7 @@ def main():
         print("No disks found!")
         sys.exit(1)
         
-    choice = select_option(disks, "Select a disk to choose partitions from", selected_disk)
+    choice = select_option(disks, "Select a disk to choose partitions from", current_disk_default)
     selected_disk = choice['name']
     
     # 2. Select Partitions
@@ -140,72 +286,23 @@ def main():
         choice = select_option(parts, prompt, current_val)
         return choice['path']
 
-    seed_device = select_part("--- Select Seed Partition ---", "Seed device: ", seed_device)
-    sprout_device = select_part("--- Select Sprout Partition ---", "Sprout device: ", sprout_device)
-    efi_device = select_part("--- Select EFI Partition ---", "EFI device: ", efi_device)
-    
-    # Get Sprout PARTUUID
-    cmd_uuid = f"blkid -s PARTUUID -o value {sprout_device}"
-    sprout_partuuid = run_command(cmd_uuid, shell=True, capture_output=True).stdout.strip()
-    print(f"Sprout PARTUUID: {sprout_partuuid}")
+    seed_device = select_part("--- Select Seed Partition ---", "Seed device: ", seed_default)
+    sprout_device = select_part("--- Select Sprout Partition ---", "Sprout device: ", sprout_default)
+    efi_device = select_part("--- Select EFI Partition ---", "EFI device: ", efi_default)
     
     print("\nConfiguration Summary:")
     print(f"Seed device:   {seed_device}")
     print(f"Sprout device: {sprout_device}")
     print(f"EFI device:    {efi_device}\n")
     
-    resp = input("Confirm formatting and installation? (yes/no/skip): ").lower()
-    if resp not in ["yes", "y", "skip"]:
-        print("Aborting.")
-        sys.exit(1)
-        
-    # Check mountpoint
-    mount_check = subprocess.run(["mountpoint", "-q", "/mnt"], check=False)
-    if mount_check.returncode == 0:
-        print("/mnt is already mounted. Unmounting...")
-        run_command("umount -R /mnt", check=False)
-        
-    if resp == "skip":
-        print("Skipping formatting")
-    else:
-        run_command(f"mkfs.btrfs -f -L SEED {seed_device}", shell=True)
-        run_command(f"mkfs.btrfs -f -L SPROUT {sprout_device}", shell=True)
-        run_command(f"mkfs.fat -F 32 -n EFI {efi_device}", shell=True)
-        print("Filesystems created successfully.")
-        
-    # Initial Mount
-    run_command(f"mount -o subvol=/ {seed_device} /mnt", shell=True)
-    
-    # Check for @ subvolume
-    subvol_list = run_command("btrfs subvolume list /mnt", shell=True, capture_output=True).stdout
-    if any(line.endswith(" @") or line.endswith("path @") for line in subvol_list.splitlines()):
-        run_command("btrfs subvolume delete /mnt/@", shell=True)
-        
-    run_command("btrfs su cr /mnt/@", shell=True)
-    run_command("umount -R /mnt", shell=True)
-    run_command(f"mount -o subvol=/@ {seed_device} /mnt", shell=True)
-    
     # Packages
     pkg_input = input("Enter packages to install (space-separated): ").strip()
-    packages = pkg_input.split() if pkg_input else default_packages
+    packages = pkg_input.split() if pkg_input else list(default_packages)
     
     if packages == default_packages:
         print(f"No packages specified. Defaulting to: {' '.join(packages)}")
     else:
         print(f"The following packages will be installed: {' '.join(packages)}")
-        
-    cont = input("Continue with installation? (Yes/no): ").lower()
-    if cont == "no":
-        print("Aborting.")
-        sys.exit(1)
-        
-    # Pacstrap
-    run_command(["pacstrap", "-K", "/mnt"] + packages)
-    run_command(f"mount -m {efi_device} /mnt/efi", shell=True)
-    
-    # fstab
-    with open("/mnt/etc/fstab", "w") as f:
-        subprocess.run(["genfstab", "-U", "/mnt"], stdout=f, check=True)
         
     # User Configuration
     print("--- System Configuration ---")
@@ -214,6 +311,7 @@ def main():
     timezone = input("Enter timezone (default: Europe/Helsinki): ").strip() or "Europe/Helsinki"
     
     print("Set root password:")
+    root_pass = ""
     while True:
         p1 = getpass.getpass("Password: ")
         p2 = getpass.getpass("Confirm Password: ")
@@ -223,6 +321,7 @@ def main():
         print("Passwords do not match. Try again.")
         
     print(f"Set password for user {user}:")
+    user_pass = ""
     while True:
         p1 = getpass.getpass("Password: ")
         p2 = getpass.getpass("Confirm Password: ")
@@ -230,66 +329,29 @@ def main():
             user_pass = p1
             break
         print("Passwords do not match. Try again.")
-        
-    # Chroot function
-    mkinitcpio_hooks = "base udev autodetect microcode modconf kms keyboard block btrfs filesystems"
-    grub_options = "--target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB"
-    
-    install_script = [
-        "hwclock --systohc",
-        f"echo '{hostname}' > /etc/hostname",
-        "echo 'KEYMAP=us' > /etc/vconsole.conf",
-        "sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen",
-        "locale-gen",
-        "echo 'LANG=en_US.UTF-8' > /etc/locale.conf",
-        f"ln -sf /usr/share/zoneinfo/{timezone} /etc/localtime",
-        f'sed -i "s/^HOOKS=.*/HOOKS=({mkinitcpio_hooks})/" /etc/mkinitcpio.conf',
-        f"echo 'root:{root_pass}' | chpasswd",
-        f"useradd -m -G wheel -s /usr/bin/bash {user}",
-        f"echo '{user}:{user_pass}' | chpasswd",
-        f"echo '{user} ALL=(ALL:ALL) ALL' > /etc/sudoers.d/{user}",
-        "systemctl enable systemd-timesyncd",
-        f"grub-install {grub_options}",
-        "echo 'GRUB_DISABLE_OS_PROBER=false' >> /etc/default/grub",
-        "grub-mkconfig -o /boot/grub/grub.cfg",
-        f"sed -i 's/root=UUID=[A-Fa-f0-9-]*/root=PARTUUID={sprout_partuuid}/g' /boot/grub/grub.cfg",
-        "passwd -l root",
-        "mkinitcpio -P"
-    ]
-    
-    full_script = "\n".join(install_script)
-    # arch-chroot /mnt /usr/bin/bash -c "$cmd"
-    # We pass the full script as one argument to bash -c
-    run_command(["arch-chroot", "/mnt", "/usr/bin/bash", "-c", full_script])
-    
-    # Final cleanup
-    print("--- Finalizing Seed/Sprout setup ---")
-    print("Unmounting /mnt...")
-    run_command("umount -R /mnt", shell=True)
-    
-    print(f"Converting {seed_device} to a seed device...")
-    run_command(f"btrfstune -S 1 {seed_device}", shell=True)
-    
-    print("Mounting seed device to add sprout...")
-    run_command(f"mount -o subvol=/@ {seed_device} /mnt", shell=True)
-    
-    print(f"Adding {sprout_device} as sprout device...")
-    run_command(f"btrfs device add -f {sprout_device} /mnt", shell=True)
-    
-    print("Unmounting and remounting sprout device...")
-    run_command("umount -R /mnt", shell=True)
-    run_command(f"mount -o subvol=/@ {sprout_device} /mnt", shell=True)
-    
-    print("Mounting EFI partition...")
-    run_command(f"mount -m {efi_device} /mnt/efi", shell=True)
-    
-    print("Generating final fstab with PARTUUIDs...")
-    with open("/mnt/etc/fstab", "w") as f:
-         subprocess.run(["genfstab", "-t", "PARTUUID", "/mnt"], stdout=f, check=True)
-         
-    print("\n################################################################")
-    print("#                   INSTALLATION COMPLETE                      #")
-    print("################################################################\n")
+
+    # Confirm
+    resp = input("Confirm formatting and installation? (yes/no): ").lower()
+    if resp not in ["yes", "y"]:
+        print("Aborting.")
+        sys.exit(1)
+
+    # Build Config
+    config = InstallConfig(
+        seed_device=seed_device,
+        sprout_device=sprout_device,
+        efi_device=efi_device,
+        hostname=hostname,
+        username=user,
+        timezone=timezone,
+        root_password=root_pass,
+        user_password=user_pass,
+        packages=packages,
+        dry_run=False # CLI default is live
+    )
+
+    # Execute
+    perform_installation(config)
     
     reboot_ans = input("Do you want to reboot now? (y/N): ").lower()
     if reboot_ans in ["y", "yes"]:
@@ -298,6 +360,9 @@ def main():
         print("You can reboot manually by typing 'reboot'.")
 
 if __name__ == "__main__":
+    if os.geteuid() != 0:
+        print("Warning: Not running as root. Operations may fail.", file=sys.stderr)
+        
     try:
         main()
     except KeyboardInterrupt:
